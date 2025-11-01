@@ -1,31 +1,34 @@
-import numpy as np
-from typing import Optional
+"""Imports for MOD300 Project 3"""
+from typing import Optional, Tuple
 from dataclasses import dataclass
+import numpy as np
 
 class SimulationBox3D:
     """Axis-aligned 3D simulation box (Å)."""
 
-    def __init__(self, xmin: float, xmax: float, ymin: float, ymax: float, zmin: float, zmax: float) -> None:
-        self.xmin = xmin
-        self.xmax = xmax
-        self.ymin = ymin
-        self.ymax = ymax
-        self.zmin = zmin
-        self.zmax = zmax
-        if not (xmin < xmax and ymin < ymax and zmin < zmax):
+    def __init__(
+            self,
+            x: Tuple[float, float],
+            y: Tuple[float, float],
+            z: Tuple[float, float],
+            ) -> None:
+        self.xmin, self.xmax = x
+        self.ymin, self.ymax = y
+        self.zmin, self.zmax = z
+        if not (self.xmin < self.xmax and self.ymin < self.ymax and self.zmin < self.zmax):
             raise ValueError("Invalid bounds: require xmin<xmax, ymin<ymax, zmin<zmax")
 
-    def volume(self):
+    def volume(self) -> float:
         """Calculate the volume of the simulation box."""
         return (self.xmax - self.xmin) * (self.ymax - self.ymin) * (self.zmax - self.zmin)
 
-    def surface_area(self):
+    def surface_area(self) -> float:
         """Calculates and returns the surface area of the simulation box."""
         return 2 * ((self.xmax - self.xmin) * (self.ymax - self.ymin) +
                      (self.ymax - self.ymin) * (self.zmax - self.zmin) +
                      (self.zmax - self.zmin) * (self.xmax - self.xmin))
 
-    def is_point_inside(self, x, y, z):
+    def is_point_inside(self, x, y, z) -> bool:
         """Check if a point (x, y, z) is inside the simulation box."""
         return (self.xmin <= x <= self.xmax and
                 self.ymin <= y <= self.ymax and
@@ -35,7 +38,7 @@ class SimulationBox3D:
     self,
     n: int | None = None,
     rng: Optional[np.random.Generator] = None
-    ):
+    ) -> tuple[float, float, float]:
         """Uniformly sample point(s) inside the box.
 
         Args:
@@ -59,7 +62,8 @@ class SimulationBox3D:
         ys = rng.uniform(self.ymin, self.ymax, size=n)
         zs = rng.uniform(self.zmin, self.zmax, size=n)
         return np.column_stack((xs, ys, zs))
-    
+
+
 @dataclass(frozen=True, slots=True)
 class Sphere:
     """Closed sphere defined by center (Å) and radius (Å)."""
