@@ -18,6 +18,18 @@ class SimulationBox3D:
         if not (self.xmin < self.xmax and self.ymin < self.ymax and self.zmin < self.zmax):
             raise ValueError("Invalid bounds: require xmin<xmax, ymin<ymax, zmin<zmax")
 
+    def __str__(self) -> str:
+        """return a string with dimensions of SimulationBox3D as:
+        x: (xmin, xmax),
+        y: (ymin, ymax)
+        z: (zmin, zmax)"""
+        return (
+            "SimulationBox dimensions:\n"
+            f"  x: ({self.xmin}, {self.xmax})\n"
+            f"  y: ({self.ymin}, {self.ymax})\n"
+            f"  z: ({self.zmin}, {self.zmax})"
+        )
+
     def volume(self) -> float:
         """Calculate the volume of the simulation box."""
         return (self.xmax - self.xmin) * (self.ymax - self.ymin) * (self.zmax - self.zmin)
