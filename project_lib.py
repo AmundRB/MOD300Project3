@@ -82,14 +82,29 @@ class Sphere:
     center: Tuple[float, float, float]
     radius: float
 
+def _max_radius_that_fits(box) -> float:
+    """Compute max radius that fits inside the box"""
+    len_x = box.xmax - box.xmin
+    len_y = box.ymax - box.ymin
+    len_z = box.zmax - box.zmin
+    return 0.5 * min(len_x, len_y, len_z)
+
+def _sample_radius(r_min, r_max_allowed, rng):
+    """picks a random radius within allowed radius range uniformly"""
+    return rng.uniform(r_min, r_max_allowed)
+
+def _sample_center_inside(box, r, rng) -> tuple:
+    """picks a random center point for the sphere inside the box"""
+    cx = rng.uniform(box.xmin + r, box.xmax - r)
+    cy = rng.uniform(box.ymin + r, box.ymax - r)
+    cz = rng.uniform(box.zmin + r, box.zmax - r)
+    return (cx, cy, cz)
+
 def random_sphere_in_box(
     box: "SimulationBox3D",
     r_min: float,
     r_max: float,
     rng: Optional[np.random.Generator] = None,
-    *,
-    fit_inside: bool = True,
-    uniform_volume: bool = False,
 ) -> Sphere:
     """Sample a random sphere within the simulation box.
 
@@ -98,9 +113,6 @@ def random_sphere_in_box(
         r_min: Minimum sphere radius (Å), must be > 0.
         r_max: Maximum sphere radius (Å), must be >= r_min.
         rng: Optional NumPy random Generator for reproducibility.
-        fit_inside: If True, ensure the entire sphere is inside the box.
-        uniform_volume: If True, sample radius so that sphere volume is uniform;
-                        otherwise sample radius uniformly in [r_min, r_hi].
 
     Returns:
         Sphere(center=(cx, cy, cz), radius=r)
@@ -108,6 +120,7 @@ def random_sphere_in_box(
     Raises:
         ValueError: If parameters are invalid or the box is too small.
     """
+    # Input Validation
     if r_min <= 0:
         raise ValueError("r_min must be > 0")
     if r_min > r_max:
@@ -115,37 +128,15 @@ def random_sphere_in_box(
 
     rng = rng or np.random.default_rng()
 
-    # Limit the max radius so it can fit inside the box if requested.
-    if fit_inside:
-        lx = box.xmax - box.xmin
-        ly = box.ymax - box.ymin
-        lz = box.zmax - box.zmin
-        r_limit = 0.5 * min(lx, ly, lz)
-        r_hi = min(r_max, r_limit)
-        if r_min > r_hi:
-            raise ValueError(
-                "Box too small for the requested radius range: "
-                f"r_min={r_min:.3f}, max allowed within box={r_limit:.3f}"
-            )
-    else:
-        r_hi = r_max
+    #Ensure the sphere fits inside the box
+    r_limit = _max_radius_that_fits(box)
+    r_max_allowed = min(r_max, r_limit)
+    if r_min > r_max_allowed:
+        raise ValueError(
+            f"Box too small: r_min={r_min:.3f}, max allowed={r_max_allowed:.3f}"
+        )
 
-    # Sample radius
-    if uniform_volume:
-        # Make sphere volumes uniform: r^3 is uniform in [r_min^3, r_hi^3].
-        u = rng.uniform(0.0, 1.0)
-        r = ((r_min**3) + u * (r_hi**3 - r_min**3)) ** (1.0 / 3.0)
-    else:
-        r = rng.uniform(r_min, r_hi)
+    r = _sample_radius(r_min, r_max_allowed, rng)
+    center = _sample_center_inside(box, r, rng)
 
-    # Sample center
-    if fit_inside:
-        cx = rng.uniform(box.xmin + r, box.xmax - r)
-        cy = rng.uniform(box.ymin + r, box.ymax - r)
-        cz = rng.uniform(box.zmin + r, box.zmax - r)
-    else:
-        cx = rng.uniform(box.xmin, box.xmax)
-        cy = rng.uniform(box.ymin, box.ymax)
-        cz = rng.uniform(box.zmin, box.zmax)
-
-    return Sphere(center=(cx, cy, cz), radius=r)
+    return Sphere(center=center, radius=r)
