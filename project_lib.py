@@ -255,9 +255,6 @@ def generate_random_spheres(
     r_min: float,
     r_max: float,
     rng: Optional[np.random.Generator] = None,
-    *,
-    uniform_volume: bool = False,
-    fit_inside: bool = True,
 ) -> List["Sphere"]:
     """Generate n random spheres in the box.
 
@@ -285,9 +282,53 @@ def generate_random_spheres(
             box=box,
             r_min=r_min,
             r_max=r_max,
-            rng=rng,
-            # expose these knobs via arguments:
-            # they map to the same semantics as in your earlier sampler
+            rng=rng
         )
         spheres.append(s)
     return spheres
+
+# Task 8
+# Units in pm
+atomic_radius_table: dict[str, int] = {
+    "H": 120,
+    "C": 170,
+    "N": 155,
+    "O": 152,
+    "P": 180,
+}
+
+def vdw_radius_angstrom(element: str) -> float:
+    """Return the van der Waals radius in Å for a given element symbol."""
+    try:
+        pm = atomic_radius_table[element.strip()]
+    except KeyError as exc:
+        raise KeyError(
+            f"Unknown element '{element}'. Add it to ELEMENT_VDW_RADIUS_PM."
+        ) from exc
+    return pm / 100.0  
+
+def load_dna_atoms(path: str) -> list[tuple[str, float, float, float]]:
+    """Parse dna_coords.txt into a list of (element, x, y, z).
+
+    - Ignores blank lines and leading spaces.
+    - Expects: <Element> <x> <y> <z> per line (whitespace-separated).
+    """
+    atoms: list[tuple[str, float, float, float]] = []
+    with open(path, "r", encoding="utf-8") as fh:
+        for lineno, raw in enumerate(fh, start=1):
+            line = raw.strip()
+            if not line:
+                continue
+            parts = line.split()
+            if len(parts) != 4:
+                raise ValueError(
+                    f"{path}:{lineno}: Expected 4 columns (Element x y z), got {len(parts)}: {raw!r}"
+                )
+            sym = parts[0]
+            try:
+                x, y, z = float(parts[1]), float(parts[2]), float(parts[3])
+            except ValueError as exc:
+                raise ValueError(f"{path}:{lineno}: Non-numeric coordinate.") from exc
+            atoms.append((sym, x, y, z))
+    return atoms
+
