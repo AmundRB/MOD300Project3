@@ -4,7 +4,7 @@ from dataclasses import dataclass
 import numpy as np
 import math
 
-
+# Task 0
 class SimulationBox3D:
     """Axis-aligned 3D simulation box (Å)."""
 
@@ -47,7 +47,8 @@ class SimulationBox3D:
         return (self.xmin <= x <= self.xmax and
                 self.ymin <= y <= self.ymax and
                 self.zmin <= z <= self.zmax)
-
+    
+    # Task 1
     def random_point(
     self,
     n: int | None = None,
@@ -77,13 +78,13 @@ class SimulationBox3D:
         zs = rng.uniform(self.zmin, self.zmax, size=n)
         return np.column_stack((xs, ys, zs))
 
-
+# Task 2
 @dataclass(frozen=True, slots=True)
 class Sphere:
     """Closed sphere defined by center (Å) and radius (Å)."""
     center: Tuple[float, float, float]
     radius: float
-
+    # Task 3
     def is_point_in_sphere(self, point: tuple[float, float, float]) -> bool:
         """
         Return True if a point is stricly inside a sphere. 
@@ -156,6 +157,7 @@ def random_sphere_in_box(
 
     return Sphere(center=center, radius=r)
 
+# Task 4
 
 def estimate_fraction_inside_sphere(
     box: "SimulationBox3D",
@@ -191,3 +193,57 @@ def estimate_fraction_inside_sphere(
     # Binomial standard error (good MC uncertainty proxy)
     stderr = math.sqrt(max(fraction * (1.0 - fraction), 0.0) / n_samples)
     return fraction, stderr
+
+#Task 5
+
+def estimate_pi(
+    box: "SimulationBox3D",
+    sphere: "Sphere",
+    n_samples: int,
+    rng: Optional[np.random.Generator] = None,
+):
+    """Estimate pi using uniform samples in an existing box that fully contains the sphere.
+    Returns (pi_hat, stderr_pi)."""
+    if n_samples <= 0:
+        raise ValueError("n_samples must be > 0")
+    rng = rng or np.random.default_rng()
+
+    # Sample points in the given box
+    pts = box.random_point(n=n_samples, rng=rng)  # (N, 3)
+
+    # Count how many are inside the sphere (strictly inside per your definition)
+    cx, cy, cz = sphere.center
+    r = sphere.radius
+    r2 = r * r
+    dx = pts[:, 0] - cx
+    dy = pts[:, 1] - cy
+    dz = pts[:, 2] - cz
+    inside = (dx*dx + dy*dy + dz*dz) < r2
+    count_inside = int(np.count_nonzero(inside))
+
+    # Fraction and conversion to pi
+    p_hat = count_inside / float(n_samples)
+    V_box = box.volume()
+    K = (3.0 * V_box) / (4.0 * r**3)  # scale factor such that pi_hat = K * p_hat
+    pi_hat = K * p_hat
+
+    # Binomial SE for p, then scale to pi
+    stderr_p = math.sqrt(max(p_hat * (1.0 - p_hat), 0.0) / n_samples)
+    stderr_pi = K * stderr_p
+    return pi_hat, stderr_pi
+
+
+def run_pi_experiment(
+    box: "SimulationBox3D",
+    sphere: "Sphere",
+    Ns: list[int],
+    rng: Optional[np.random.Generator] = None,
+) -> tuple[list[int], list[float], list[float]]:
+    """Convenience helper: compute pi-hat and error for a list of sample sizes."""
+    rng = rng or np.random.default_rng()
+    ests, errs = [], []
+    for N in Ns:
+        pi_hat, err = estimate_pi(box, sphere, n_samples=N, rng=rng)
+        ests.append(pi_hat)
+        errs.append(err)
+    return Ns, ests, errs
