@@ -2,6 +2,8 @@
 from typing import Optional, Tuple
 from dataclasses import dataclass
 import numpy as np
+import math
+
 
 class SimulationBox3D:
     """Axis-aligned 3D simulation box (Å)."""
@@ -91,6 +93,9 @@ class Sphere:
         d_y = point[1] - self.center[1]
         d_z = point[2] - self.center[2]
         return (d_x * d_x + d_y * d_y + d_z * d_z) < (self.radius * self.radius)
+    def volume(self) -> float:
+        """Calculate the volume of the sphere."""
+        return (4.0 / 3.0) * math.pi * (self.radius ** 3)
 
 def _max_radius_that_fits(box) -> float:
     """Compute max radius that fits inside the box"""
@@ -151,3 +156,38 @@ def random_sphere_in_box(
 
     return Sphere(center=center, radius=r)
 
+
+def estimate_fraction_inside_sphere(
+    box: "SimulationBox3D",
+    sphere: "Sphere",
+    n_samples: int,
+    rng: Optional[np.random.Generator] = None,
+):
+    """Estimate fraction of box volume covered by a single sphere via Monte Carlo.
+
+    Returns:
+        fraction: float in [0,1]
+        stderr:   binomial standard error ≈ sqrt(p*(1-p)/n_samples)
+    """
+    if n_samples <= 0:
+        raise ValueError("n_samples must be > 0")
+
+    rng = rng or np.random.default_rng()
+
+    # Sample N points uniformly in the box (vectorized)
+    pts = box.random_point(n=n_samples, rng=rng)  # shape (N, 3)
+
+    # Vectorized point-in-sphere: ||p - c||^2 < r^2
+    cx, cy, cz = sphere.center
+    r2 = sphere.radius * sphere.radius
+    dx = pts[:, 0] - cx
+    dy = pts[:, 1] - cy
+    dz = pts[:, 2] - cz
+    inside = (dx * dx + dy * dy + dz * dz) < r2
+
+    count_inside = int(np.count_nonzero(inside))
+    fraction = count_inside / float(n_samples)
+
+    # Binomial standard error (good MC uncertainty proxy)
+    stderr = math.sqrt(max(fraction * (1.0 - fraction), 0.0) / n_samples)
+    return fraction, stderr
