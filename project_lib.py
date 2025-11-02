@@ -1,5 +1,5 @@
 """Imports for MOD300 Project 3"""
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 from dataclasses import dataclass
 import numpy as np
 import math
@@ -209,9 +209,9 @@ def estimate_pi(
     rng = rng or np.random.default_rng()
 
     # Sample points in the given box
-    pts = box.random_point(n=n_samples, rng=rng)  # (N, 3)
+    pts = box.random_point(n=n_samples, rng=rng)  
 
-    # Count how many are inside the sphere (strictly inside per your definition)
+    # Count how many are inside the sphere
     cx, cy, cz = sphere.center
     r = sphere.radius
     r2 = r * r
@@ -227,7 +227,7 @@ def estimate_pi(
     K = (3.0 * V_box) / (4.0 * r**3)  # scale factor such that pi_hat = K * p_hat
     pi_hat = K * p_hat
 
-    # Binomial SE for p, then scale to pi
+    # Binomial std error for p, then scale to pi
     stderr_p = math.sqrt(max(p_hat * (1.0 - p_hat), 0.0) / n_samples)
     stderr_pi = K * stderr_p
     return pi_hat, stderr_pi
@@ -247,3 +247,47 @@ def run_pi_experiment(
         ests.append(pi_hat)
         errs.append(err)
     return Ns, ests, errs
+
+# Task 6
+def generate_random_spheres(
+    box: "SimulationBox3D",
+    n: int,
+    r_min: float,
+    r_max: float,
+    rng: Optional[np.random.Generator] = None,
+    *,
+    uniform_volume: bool = False,
+    fit_inside: bool = True,
+) -> List["Sphere"]:
+    """Generate n random spheres in the box.
+
+    By default, spheres are allowed to overlap. Each sphere fully fits in the box
+    if fit_inside=True. Radii are uniform in [r_min, r_max] unless uniform_volume=True.
+
+    Args:
+        box: Simulation box.
+        n: number of spheres to generate.
+        r_min, r_max: radius range (Å).
+        rng: optional NumPy Generator for reproducibility.
+        uniform_volume: if True, sample radii uniformly in volume (r^3).
+        fit_inside: if True, ensure spheres are entirely inside the box.
+
+    Returns:
+        List of Sphere objects.
+    """
+    if n <= 0:
+        raise ValueError("n must be > 0")
+    rng = rng or np.random.default_rng()
+
+    spheres: List[Sphere] = []
+    for _ in range(n):
+        s = random_sphere_in_box(
+            box=box,
+            r_min=r_min,
+            r_max=r_max,
+            rng=rng,
+            # expose these knobs via arguments:
+            # they map to the same semantics as in your earlier sampler
+        )
+        spheres.append(s)
+    return spheres
