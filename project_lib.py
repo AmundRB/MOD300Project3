@@ -82,6 +82,16 @@ class Sphere:
     center: Tuple[float, float, float]
     radius: float
 
+    def is_point_in_sphere(self, point: tuple[float, float, float]) -> bool:
+        """
+        Return True if a point is stricly inside a sphere. 
+        Boundary of sphere counts as outside 
+        """
+        d_x = point[0] - self.center[0]
+        d_y = point[1] - self.center[1]
+        d_z = point[2] - self.center[2]
+        return (d_x * d_x + d_y * d_y + d_z * d_z) < (self.radius * self.radius)
+
 def _max_radius_that_fits(box) -> float:
     """Compute max radius that fits inside the box"""
     len_x = box.xmax - box.xmin
@@ -140,3 +150,4 @@ def random_sphere_in_box(
     center = _sample_center_inside(box, r, rng)
 
     return Sphere(center=center, radius=r)
+
