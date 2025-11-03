@@ -1,5 +1,5 @@
 """Imports for MOD300 Project 3"""
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Iterable, Sequence
 from dataclasses import dataclass
 import numpy as np
 import math
@@ -34,7 +34,7 @@ class SimulationBox3D:
 
     def volume(self) -> float:
         """Calculate the volume of the simulation box."""
-        return (self.xmax - self.xmin) * (self.ymax - self.ymin) * (self.zmax - self.zmin)
+        return abs(self.xmax - self.xmin) * (self.ymax - self.ymin) * (self.zmax - self.zmin)
 
     def surface_area(self) -> float:
         """Calculates and returns the surface area of the simulation box."""
@@ -164,35 +164,9 @@ def estimate_fraction_inside_sphere(
     sphere: "Sphere",
     n_samples: int,
     rng: Optional[np.random.Generator] = None,
-):
-    """Estimate fraction of box volume covered by a single sphere via Monte Carlo.
-
-    Returns:
-        fraction: float in [0,1]
-        stderr:   binomial standard error ≈ sqrt(p*(1-p)/n_samples)
-    """
-    if n_samples <= 0:
-        raise ValueError("n_samples must be > 0")
-
-    rng = rng or np.random.default_rng()
-
-    # Sample N points uniformly in the box (vectorized)
-    pts = box.random_point(n=n_samples, rng=rng)  # shape (N, 3)
-
-    # Vectorized point-in-sphere: ||p - c||^2 < r^2
-    cx, cy, cz = sphere.center
-    r2 = sphere.radius * sphere.radius
-    dx = pts[:, 0] - cx
-    dy = pts[:, 1] - cy
-    dz = pts[:, 2] - cz
-    inside = (dx * dx + dy * dy + dz * dz) < r2
-
-    count_inside = int(np.count_nonzero(inside))
-    fraction = count_inside / float(n_samples)
-
-    # Binomial standard error (good MC uncertainty proxy)
-    stderr = math.sqrt(max(fraction * (1.0 - fraction), 0.0) / n_samples)
-    return fraction, stderr
+) -> tuple[float, float]:
+    """Backward-compatible wrapper for a single sphere (old Task 4 API)."""
+    return estimate_fraction_inside_spheres(box, [sphere], n_samples, rng)
 
 #Task 5
 
@@ -289,46 +263,113 @@ def generate_random_spheres(
 
 # Task 8
 # Units in pm
-atomic_radius_table: dict[str, int] = {
+def get_atom_radius(atom: str) -> int:
+    """Return the radius of an atom in Å."""
+    radius: dict[str, int] = {
     "H": 120,
     "C": 170,
     "N": 155,
     "O": 152,
     "P": 180,
-}
+    }
+    assert atom in radius, f"Atom {atom} not recognized."
+    
+    return radius[atom] * 0.01  # Convert pm to Å
 
-def vdw_radius_angstrom(element: str) -> float:
-    """Return the van der Waals radius in Å for a given element symbol."""
-    try:
-        pm = atomic_radius_table[element.strip()]
-    except KeyError as exc:
-        raise KeyError(
-            f"Unknown element '{element}'. Add it to ELEMENT_VDW_RADIUS_PM."
-        ) from exc
-    return pm / 100.0  
+def create_sphere_from_dna_file(
+    filename: str,
+) -> list[Sphere]:
+    """Create spheres from a DNA file.
 
-def load_dna_atoms(path: str) -> list[tuple[str, float, float, float]]:
-    """Parse dna_coords.txt into a list of (element, x, y, z).
+    Args:
+        filename: Path to the DNA file.
 
-    - Ignores blank lines and leading spaces.
-    - Expects: <Element> <x> <y> <z> per line (whitespace-separated).
+    Returns:
+        List of Sphere objects.
     """
-    atoms: list[tuple[str, float, float, float]] = []
-    with open(path, "r", encoding="utf-8") as fh:
-        for lineno, raw in enumerate(fh, start=1):
-            line = raw.strip()
-            if not line:
+    spheres = []
+    with open(filename, "r") as f:
+        for line in f:
+            lineParts = line.strip().split()
+            if len(lineParts) != 4:
                 continue
-            parts = line.split()
-            if len(parts) != 4:
-                raise ValueError(
-                    f"{path}:{lineno}: Expected 4 columns (Element x y z), got {len(parts)}: {raw!r}"
-                )
-            sym = parts[0]
-            try:
-                x, y, z = float(parts[1]), float(parts[2]), float(parts[3])
-            except ValueError as exc:
-                raise ValueError(f"{path}:{lineno}: Non-numeric coordinate.") from exc
-            atoms.append((sym, x, y, z))
-    return atoms
+            atomtype = lineParts[0]
+            x = float(lineParts[1])
+            y = float(lineParts[2])
+            z = float(lineParts[3])
+            radius = get_atom_radius(atomtype)
 
+            spheres.append(Sphere(center=(x, y, z), radius=radius))
+    return spheres
+
+def bounding_box_for_spheres(
+    spheres: Iterable[Sphere]
+) -> SimulationBox3D:
+    """Tight axis-aligned box that contains all spheres (+ optional margin in Å)."""
+    xmin = ymin = zmin = float("inf")
+    xmax = ymax = zmax = float("-inf")
+
+    for s in spheres:
+        cx, cy, cz = s.center
+        r = s.radius
+        xmin = min(xmin, cx - r)
+        ymin = min(ymin, cy - r)
+        zmin = min(zmin, cz - r)
+        xmax = max(xmax, cx + r)
+        ymax = max(ymax, cy + r)
+        zmax = max(zmax, cz + r)
+
+    return SimulationBox3D(
+        x=(xmin - 1, xmax + 1),
+        y=(ymin - 1, ymax + 1),
+        z=(zmin - 1, zmax + 1),
+    )
+
+def estimate_fraction_inside_spheres(
+    box: "SimulationBox3D",
+    spheres: Sequence["Sphere"],
+    n_samples: int,
+    rng: Optional[np.random.Generator] = None,
+) -> tuple[float, float]:
+    """Estimate fraction of box volume covered by the union of many spheres.
+
+    Args:
+        box: SimulationBox3D defining the sampling region.
+        spheres: sequence of Sphere objects (e.g. all DNA atoms).
+        n_samples: number of random points.
+        rng: optional NumPy Generator for reproducibility.
+
+    Returns:
+        (fraction, stderr) where
+        - fraction ≈ (# points inside any sphere) / n_samples
+        - stderr   ≈ sqrt(p * (1 - p) / n_samples)
+    """
+    if n_samples <= 0:
+        raise ValueError("n_samples must be > 0")
+    if not spheres:
+        raise ValueError("spheres must be non-empty")
+
+    rng = rng or np.random.default_rng()
+
+    
+    pts = box.random_point(n=n_samples, rng=rng)
+    xs = pts[:, 0]
+    ys = pts[:, 1]
+    zs = pts[:, 2]
+
+    # inside_any[i] is True if point i is inside at least one sphere
+    inside_any = np.zeros(n_samples, dtype=bool)
+
+    for s in spheres:
+        cx, cy, cz = s.center
+        r2 = s.radius * s.radius
+        dx = xs - cx
+        dy = ys - cy
+        dz = zs - cz
+        inside_this = (dx * dx + dy * dy + dz * dz) < r2
+        inside_any |= inside_this 
+
+    count_inside = int(np.count_nonzero(inside_any))
+    fraction = count_inside / float(n_samples)
+    stderr = math.sqrt(max(fraction * (1.0 - fraction), 0.0) / n_samples)
+    return fraction, stderr
