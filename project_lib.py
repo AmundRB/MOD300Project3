@@ -373,3 +373,108 @@ def estimate_fraction_inside_spheres(
     fraction = count_inside / float(n_samples)
     stderr = math.sqrt(max(fraction * (1.0 - fraction), 0.0) / n_samples)
     return fraction, stderr
+
+# Topic 2 Task 1
+
+# Function for handling walkers trying to step outside the box
+def _reflect_on_boundary(
+        val: float,
+        lo: float,
+        hi: float
+        ) -> float:
+    """
+    If a walker(point) tries to move outside the box, reflect in like bouncing of a wall
+    args:
+        val (float): The value to reflect.
+        lo (float): Lower bound of the box.
+        hi (float): Upper bound of the box.
+
+    returns:
+        float: The value to reflect.
+    """
+    while val < lo or val > hi:
+        if val < lo:
+            val = lo + (lo - val)
+        elif val > hi:
+            val = hi - (val - hi)
+    return val
+
+# Function for handling "one step"
+def _sample_step(
+        step_sigma: float,
+        rng: np.random.Generator
+) -> np.ndarray:
+    """One random 3D step"""
+    return rng.normal(0.0, step_sigma, size=3)
+
+def _simulate_single_walker(
+        start: np.ndarray,
+        num_steps: int,
+        step_sigma: float,
+        box
+) -> np.ndarray:
+    """
+    One random 3D walker with reflecting boundary
+    args:
+        start (np.ndarray): Initial position, shape (3,).
+        num_steps (int): Number of steps to simulate (>= 0).
+        step_sigma (float): Standard deviation of the Gaussian step per axis.
+        box: SimulationBox3D-like object with (xmin, xmax, ymin, ymax, zmin, zmax).
+
+    returns:
+        np.ndarray: Trajectory of shape (num_steps+1, 3), including start.
+    """
+    # initializing variables
+    rng = np.random.default_rng()
+    traj = np.empty((num_steps + 1, 3), dtype=float)
+    pos = np.array(start, dtype=float)
+    traj[0] = pos
+
+    # Simulating walking for one walker and storing in array traj
+    for t in range(1, num_steps + 1):
+        pos = pos + _sample_step(step_sigma, rng)
+        pos[0] = _reflect_on_boundary(pos[0], box.xmin, box.xmax)
+        pos[1] = _reflect_on_boundary(pos[1], box.ymin, box.ymax)
+        pos[2] = _reflect_on_boundary(pos[2], box.zmin, box.zmax)
+        traj[t] = pos
+    
+    return traj
+
+# Function for generating a set of random walkers in 3D starting from random points
+def random_walkers_3D(
+        box,
+        num_walkers: int,
+        num_steps: int,
+        step_sigma: float,
+) -> np.ndarray:
+    """
+    Generates a set of random walkers in 3D from random starting points.
+    args:
+        box: SimulationBox3D-like object with (xmin, xmax, ymin, ymax, zmin, zmax).
+        num_walkers (int): Number of walkers to simulate (> 0).
+        num_steps (int): Number of steps per walker (>= 0).
+        step_sigma (float): Standard deviation of the Gaussian step per axis (> 0).
+
+    returns:
+        np.ndarray: Array of trajectories with shape (num_walkers, num_steps+1, 3).
+    """
+    # Input validation
+    if num_walkers <= 0 or num_steps < 0:
+        raise ValueError("num_walkers must be > 0 and num_steps >= 0")
+    if step_sigma <= 0:
+        raise ValueError("step_sigma must be > 0")
+    
+    # Variable initialization
+    rng = np.random.default_rng()
+    starts = box.random_point(n=num_walkers, rng=rng)
+    all_traj = np.empty((num_walkers, num_steps + 1, 3), dtype=float)
+
+    # Simulate walking for all walkers with num_steps
+    for w in range(num_walkers):
+        all_traj[w] = _simulate_single_walker(
+            start=starts[w],
+            num_steps=num_steps,
+            step_sigma=step_sigma,
+            box=box,
+        )
+    return all_traj
