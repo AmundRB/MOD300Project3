@@ -411,7 +411,9 @@ def _simulate_single_walker(
         start: np.ndarray,
         num_steps: int,
         step_sigma: float,
-        box
+        box,
+        rng: np.random.Generator | None = None,
+        steps: np.ndarray | None = None,
 ) -> np.ndarray:
     """
     One random 3D walker with reflecting boundary
@@ -425,14 +427,15 @@ def _simulate_single_walker(
         np.ndarray: Trajectory of shape (num_steps+1, 3), including start.
     """
     # initializing variables
-    rng = np.random.default_rng()
+    rng = rng or np.random.default_rng()
     traj = np.empty((num_steps + 1, 3), dtype=float)
     pos = np.array(start, dtype=float)
     traj[0] = pos
 
     # Simulating walking for one walker and storing in array traj
     for t in range(1, num_steps + 1):
-        pos = pos + _sample_step(step_sigma, rng)
+        step = steps[t-1] if steps is not None else _sample_step(step_sigma, rng)
+        pos = pos + step
         pos[0] = _reflect_on_boundary(pos[0], box.xmin, box.xmax)
         pos[1] = _reflect_on_boundary(pos[1], box.ymin, box.ymax)
         pos[2] = _reflect_on_boundary(pos[2], box.zmin, box.zmax)
@@ -446,6 +449,9 @@ def random_walkers_3D(
         num_walkers: int,
         num_steps: int,
         step_sigma: float,
+        starts: np.ndarray | None = None,
+        steps: np.ndarray | None = None,
+        rng: np.random.Generator | None = None,
 ) -> np.ndarray:
     """
     Generates a set of random walkers in 3D from random starting points.
@@ -465,8 +471,9 @@ def random_walkers_3D(
         raise ValueError("step_sigma must be > 0")
     
     # Variable initialization
-    rng = np.random.default_rng()
-    starts = box.random_point(n=num_walkers, rng=rng)
+    rng = rng or np.random.default_rng()
+    if starts is None:
+        starts = box.random_point(n=num_walkers, rng=rng)
     all_traj = np.empty((num_walkers, num_steps + 1, 3), dtype=float)
 
     # Simulate walking for all walkers with num_steps
@@ -476,5 +483,221 @@ def random_walkers_3D(
             num_steps=num_steps,
             step_sigma=step_sigma,
             box=box,
+            steps=None if steps is None else steps[w]
         )
     return all_traj
+
+# Topic 2 Task 2
+
+def _reflect_on_boundary_vectorized(
+        coords: np.ndarray,
+        lo: float,
+        hi: float
+) -> np.ndarray:
+    """
+    If a walker tries to move outside the box, reflect in like bouncing of a wall: Vectorized
+    args:
+        coords: np.ndarray of positions
+        lo: lower bound of box
+        hi: upper bound of box
+    
+    returns:
+        np.ndarray with all values reflected into the box
+    """
+    # loop reflects until every entry lies inside the box
+    while True:
+        under = coords < lo
+        over  = coords > hi
+
+        if not (under.any() or over.any()):
+            break
+
+        # mirror the out-of-bounds values back in
+        coords[under] = 2.0 * lo - coords[under]
+        coords[over]  = 2.0 * hi - coords[over]
+
+    return coords
+    
+def random_walkers_3D_fast(
+        box,
+        num_walkers: int,
+        num_steps: int,
+        step_sigma: float,
+        starts: np.ndarray | None = None,
+        steps: np.ndarray | None = None,
+        rng: np.random.Generator | None = None,
+) -> np.ndarray:
+    """
+    Vectorized 3D random walkers with reflecting boundaries. Generates all steps at once
+
+    args:
+        box: SimulationBox3D-like with (xmin, xmax, ymin, ymax, zmin, zmax).
+        num_walkers: number of walkers (> 0).
+        num_steps: steps per walker (>= 0).
+        step_sigma: Gaussian step std-dev per axis (> 0).
+        rng: optional NumPy Generator; if None, a new default_rng() is used.
+    
+    returns:
+        np.ndarray of shape (num_walkers, num_steps+1, 3): full trajectories.
+    """
+    # Input validation
+    if num_walkers <= 0 or num_steps < 0:
+        raise ValueError("num_walkers must be > 0 and num_steps >= 0")
+    if step_sigma <= 0:
+        raise ValueError("step_sigma must be > 0")
+    
+    # Variable initialization
+    rng = rng or np.random.default_rng()
+    if starts is None:
+        starts = box.random_point(n=num_walkers, rng=rng)
+
+    # use provbided steps or make all random steps in one go
+    if steps is None:
+        steps = rng.normal(0.0, step_sigma, size=(num_walkers, num_steps, 3))
+
+
+    # Creating trajectories with starting position
+    traj = np.empty((num_walkers, num_steps + 1, 3), dtype=float)
+    traj[:, 0, :] = starts
+    pos = starts.copy()
+
+    # creating the movement and using reflect on boundary function to reflect coordinates into the box boundary
+    for t in range(num_steps):
+        pos = pos + steps[:, t, :]
+        pos[:, 0] = _reflect_on_boundary_vectorized(pos[:, 0], box.xmin, box.xmax)
+        pos[:, 1] = _reflect_on_boundary_vectorized(pos[:, 1], box.ymin, box.ymax)
+        pos[:, 2] = _reflect_on_boundary_vectorized(pos[:, 2], box.zmin, box.zmax)
+        traj[:, t + 1, :] = pos
+
+    return traj
+
+def assert_traj_shape_and_bounds(traj: np.ndarray, box: "SimulationBox3D",
+                                 num_walkers: int, num_steps: int) -> None:
+    """
+    description:
+        Validate trajectory array shape and that all coordinates is inside the box.
+    args:
+        traj (np.ndarray): Trajectories, shape (num_walkers, num_steps+1, 3).
+        box (SimulationBox3D): 3D simulation box
+        num_walkers (int): walker count.
+        num_steps (int): step count per walker.
+    returns:
+        None. Raises AssertionError on mismatch.
+    """
+    assert traj.shape == (num_walkers, num_steps + 1, 3), "Unexpected trajectory shape"
+    xmin, xmax = box.xmin, box.xmax
+    ymin, ymax = box.ymin, box.ymax
+    zmin, zmax = box.zmin, box.zmax
+    xs, ys, zs = traj[..., 0], traj[..., 1], traj[..., 2]
+    assert np.all((xs >= xmin) & (xs <= xmax)), "x out of bounds"
+    assert np.all((ys >= ymin) & (ys <= ymax)), "y out of bounds"
+    assert np.all((zs >= zmin) & (zs <= zmax)), "z out of bounds"
+    print("Assert checks on shape and boundary ok!")
+
+
+def run_walkers_slow_fast(box: "SimulationBox3D",
+                          num_walkers: int,
+                          num_steps: int,
+                          step_sigma: float,
+                          steps: np.ndarray | None = None,
+                          seed: int = 42,
+                          ) -> dict[str, object]:
+    """
+    description:
+        Run the loop-based (slow) and vectorized (fast) random walkers with shared starts & RNG seed,
+        time both, and perform basic assertions.
+    args:
+        box (SimulationBox3D): 3D simulation box.
+        num_walkers (int): Number of walkers.
+        num_steps (int): Steps per walker.
+        step_sigma (float): Std dev of Gaussian step per axis.
+        seed (int): RNG seed used for both runs and shared starts.
+    returns:
+        dict with keys:
+            "traj_slow" (np.ndarray), "traj_fast" (np.ndarray),
+            "time_slow" (float), "time_fast" (float),
+            "starts" (np.ndarray)
+    """
+    from time import perf_counter
+    rng_starts = np.random.default_rng(seed)
+    starts = box.random_point(n=num_walkers, rng=rng_starts)
+
+    # run and time the slow random walkers function, run assertion checks.
+    rng_slow = np.random.default_rng(seed)
+    t0 = perf_counter()
+    traj_slow = random_walkers_3D(
+        box=box,
+        num_walkers=num_walkers,
+        num_steps=num_steps,
+        step_sigma=step_sigma,
+        starts=starts,
+        steps=steps,
+        rng=rng_slow,
+    )
+    t1 = perf_counter()
+    time_slow = t1 - t0
+    assert_traj_shape_and_bounds(traj_slow, box, num_walkers, num_steps)
+
+    # Run and time the fast random walkers function, run assertion checks
+    rng_fast = np.random.default_rng(seed)
+    t0 = perf_counter()
+    traj_fast = random_walkers_3D_fast(
+        box=box,
+        num_walkers=num_walkers,
+        num_steps=num_steps,
+        step_sigma=step_sigma,
+        starts=starts,
+        rng=rng_fast,
+        steps=steps
+    )
+    t1 = perf_counter()
+    time_fast = t1 - t0
+    assert_traj_shape_and_bounds(traj_fast, box, num_walkers, num_steps)
+
+    return {
+        "traj_slow": traj_slow,
+        "traj_fast": traj_fast,
+        "time_slow": time_slow,
+        "time_fast": time_fast,
+        "starts": starts,
+    }
+
+
+def plot_walkers_subset(traj_slow: np.ndarray,
+                        traj_fast: np.ndarray,
+                        box: "SimulationBox3D",
+                        subset: int = 5,
+                        title: str | None = None) -> None:
+    """
+    description:
+        Plot the same subset of walkers for slow vs fast side-by-side.
+    args:
+        traj_slow (np.ndarray): Slow trajectories, shape (W, T+1, 3).
+        traj_fast (np.ndarray): Fast trajectories, shape (W, T+1, 3).
+        box (SimulationBox3D): 3D simulation box.
+        subset (int): Number of walkers to show from the start.
+        title (str|None): Optional suptitle for the figure.
+    returns:
+        None. Displays a matplotlib figure.
+    """
+    import matplotlib.pyplot as plt
+
+    W = min(subset, traj_slow.shape[0], traj_fast.shape[0])
+    fig = plt.figure(figsize=(12, 5))
+
+    ax1 = fig.add_subplot(1, 2, 1, projection="3d")
+    for w in range(W):
+        ax1.plot(traj_slow[w, :, 0], traj_slow[w, :, 1], traj_slow[w, :, 2], alpha=0.85)
+    ax1.set_title("Regular random walkers (slow)")
+    ax1.set_xlim(box.xmin, box.xmax); ax1.set_ylim(box.ymin, box.ymax); ax1.set_zlim(box.zmin, box.zmax)
+
+    ax2 = fig.add_subplot(1, 2, 2, projection="3d")
+    for w in range(W):
+        ax2.plot(traj_fast[w, :, 0], traj_fast[w, :, 1], traj_fast[w, :, 2], alpha=0.85)
+    ax2.set_title("Fast vectorized walkers")
+    ax2.set_xlim(box.xmin, box.xmax); ax2.set_ylim(box.ymin, box.ymax); ax2.set_zlim(box.zmin, box.zmax)
+
+    if title:
+        fig.suptitle(title)
+    plt.tight_layout()
+    plt.show()
