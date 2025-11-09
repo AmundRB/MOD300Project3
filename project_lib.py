@@ -701,3 +701,321 @@ def plot_walkers_subset(traj_slow: np.ndarray,
         fig.suptitle(title)
     plt.tight_layout()
     plt.show()
+
+
+# Topic 2 Task 5
+
+def is_point_inside_sphere(
+        point: np.ndarray,
+        spheres: Sequence["Sphere"],
+) -> bool:
+    """
+    Returns true if a 3D point lies inside any of the spheres in the box.
+    """
+    x, y, z = float(point[0]), float(point[1]), float(point[2])
+    for s in spheres:
+        cx, cy, cz = s.center
+        dx = x - cx
+        dy = y - cy
+        dz = z - cz
+        if dx*dx + dy*dy + dz*dz < (s.radius * s.radius):
+            return True
+    return False
+
+def sample_start_outside_spheres(
+        box: "SimulationBox3D",
+        spheres: Sequence["Sphere"],
+        rng: np.random.Generator,
+) -> np.ndarray:
+    """
+    finds a single point inside the box that is not inside a sphere
+    """
+    while True:
+        # use existing uniform random point function
+        x, y, z = box.random_point(rng=rng)
+        p = np.array([x, y, z], dtype=float)
+        # accept only if it lies in the accessible region of the box
+        if not is_point_inside_sphere(p, spheres):
+            return p
+        
+def sample_starts_outside_spheres(
+        box: "SimulationBox3D",
+        spheres: Sequence["Sphere"],
+        num_walkers: int,
+        rng: np.random.Generator,
+) -> np.ndarray:
+    """
+    Finds valid starting positions(not inside any sphere) for all the walkers
+    """
+    if num_walkers <= 0:
+        raise ValueError("num_walkers must be > 0")
+    starts = np.empty((num_walkers, 3), dtype=float)
+    for w in range(num_walkers):
+        starts[w] = sample_start_outside_spheres(box, spheres, rng)
+    return starts
+
+def random_walkers_avoiding_spheres(
+        box: "SimulationBox3D",
+        spheres: Sequence["Sphere"],
+        num_walkers: int,
+        num_steps: int,
+        step_sigma: float,
+        rng: Optional[np.random.Generator] = None,
+) -> np.ndarray:
+    """
+    Random walkers with:
+      - reflecting box boundaries (reuses _reflect_on_boundary)
+      - "hard" spherical obstacles: if a proposed step lands inside a sphere,
+        the step is rejected and the walker stays where it was.
+
+    Args:
+        box: 3D simulation box.
+        spheres: obstacle spheres (e.g. DNA atoms).
+        num_walkers: number of independent walkers (>0).
+        num_steps: number of steps per walker (>=0).
+        step_sigma: std dev of Gaussian step per axis (>0).
+        rng: optional NumPy Generator.
+
+    Returns:
+        traj: array of shape (num_walkers, num_steps+1, 3),
+              containing full trajectories for all walkers.
+    """
+    # Input Validation
+    if num_walkers <= 0 or num_steps < 0:
+        raise ValueError("num_walkers must be > 0 and num_steps >= 0")
+    if step_sigma <= 0:
+        raise ValueError("step_sigma must be > 0")
+
+    rng = rng or np.random.default_rng()
+
+    # Start all walkers in valid starting positions inside the box
+    starts = sample_starts_outside_spheres(box, spheres, num_walkers, rng)
+
+    # Build trajectory arrays and simulate walkers
+    traj = np.empty((num_walkers, num_steps + 1, 3), dtype=float)
+    for w in range(num_walkers):
+        pos = np.array(starts[w], dtype=float)
+        traj[w, 0, :] = pos
+        for t in range(1, num_steps + 1):
+            # try a random step(reusing _sample_step function)
+            step = _sample_step(step_sigma, rng)
+            test_step = pos + step
+
+            # reflect on box boundaries
+            test_step[0] = _reflect_on_boundary(test_step[0], box.xmin, box.xmax)
+            test_step[1] = _reflect_on_boundary(test_step[1], box.ymin, box.ymax)
+            test_step[2] = _reflect_on_boundary(test_step[2], box.zmin, box.zmax)
+
+            # Check if step lands inside a sphere. If we land inside we reject the step.
+            if is_point_inside_sphere(test_step, spheres):
+                # no update of pos
+                traj[w, t, :] = pos
+            else:
+                # accept step
+                pos = test_step
+                traj[w, t, :] = pos
+
+    return traj
+
+def turn_coord_to_index(
+        coord: float,
+        lo: float,
+        hi: float,
+        n_bins: int,
+) -> int:
+    """
+    Map a coordinate to a grid index in [0, n_bins-1].
+    Handles possible floating-point edge cases by clamping.
+    """
+    if hi <= lo:
+        raise ValueError("hi must be > lo")
+    # normalise to [0, 1)
+    u = (coord - lo) / (hi - lo)
+    # map to [0, n_bins)
+    i = int(u * n_bins)
+    # clamp to valid range
+    if i < 0:
+        i = 0
+    elif i >= n_bins:
+        i = n_bins - 1
+    return i
+
+def turn_position_to_grid_index(
+        box: "SimulationBox3D",
+        pos: np.ndarray,
+        n_grid: int,
+) -> tuple[int, int, int]:
+    """
+    Turns a 3D position into grid index
+    """
+    x, y, z = float(pos[0]), float(pos[1]), float(pos[2])
+    ix = turn_coord_to_index(x, box.xmin, box.xmax, n_grid)
+    iy = turn_coord_to_index(y, box.ymin, box.ymax, n_grid)
+    iz = turn_coord_to_index(z, box.zmin, box.zmax, n_grid)
+    return ix, iy, iz
+
+def estimate_accessible_volume_random_walk(
+        box: "SimulationBox3D",
+        spheres: Sequence["Sphere"],
+        num_walkers: int,
+        num_steps: int,
+        step_sigma: float,
+        n_grid: int = 32,
+        rng: Optional[np.random.Generator] = None,
+) -> tuple[float, float, float]:
+    """
+    Estimates accessible volume of box by having many random walkers and a 3D occupancy grid
+    """
+    # Input validation
+    if n_grid <= 0:
+        raise ValueError("n_grid must be > 0")
+
+    rng = rng or np.random.default_rng()
+
+    # Simulate random walkers and get their trajectories
+    traj = random_walkers_avoiding_spheres(
+        box=box,
+        spheres=spheres,
+        num_walkers=num_walkers,
+        num_steps=num_steps,
+        step_sigma=step_sigma,
+        rng=rng,
+    )
+
+    # Initialize 3D occupancy grid. Visited tells if a grid cell has been traveled through by a walker
+    visited = np.zeros((n_grid, n_grid, n_grid), dtype=bool)
+
+    # loop over all walkers and time steps, and update visited trajectory paths to true
+    for w in range(num_walkers):
+        for t in range(num_steps + 1):
+            ix, iy, iz = turn_position_to_grid_index(box, traj[w, t, :], n_grid)
+            visited[ix, iy, iz] = True
+
+    # Count visited cells vs total cells and find the accessible fraction of the box
+    num_visited = int(visited.sum())
+    num_total = visited.size
+    accessible_fraction = num_visited / float(num_total)
+    stderr_fraction = math.sqrt(
+        max(accessible_fraction * (1.0 - accessible_fraction), 0.0) / num_total
+    )
+
+    # Converting fraction to volume
+    volume_box = box.volume()
+    accessible_volume = accessible_fraction * volume_box
+    stderr_volume = stderr_fraction * volume_box
+
+    return accessible_fraction, stderr_fraction, accessible_volume, stderr_volume
+
+def compare_dna_accessible_box_volumes(
+        box: "SimulationBox3D",
+        dna_volume: float,
+        accessible_volume: float,
+) -> None:
+    """
+    description:
+        Print a comparison between DNA volume, accessible volume,
+        and the total simulation box volume.
+    args:
+        box (SimulationBox3D): 3D simulation box used for DNA and random walks.
+        dna_volume (float): Estimated DNA volume (from Monte Carlo in Topic 1).
+        accessible_volume (float): Estimated accessible volume (from random walks in Topic 2).
+    returns:
+        Prints numbers 
+    """
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    # Basic volumes
+    V_box = box.volume()
+    V_DNA = float(dna_volume)
+    V_acc = float(accessible_volume)
+    V_gap = V_box - (V_DNA + V_acc)
+
+    # Prints
+    print(f"Box volume        : {V_box:.1f} Å³")
+    print(f"DNA volume (est.) : {V_DNA:.1f} Å³")
+    print(f"Accessible volume : {V_acc:.1f} Å³")
+    print(f"Residual gap      : {V_gap:.1f} Å³  "
+          f"({100.0 * V_gap / V_box:.1f}% of box)\n")
+
+
+def known_volume_test_accessible_volume_from_walkers() -> dict[str, float]:
+    """
+    description:
+        Toy sanity test for the random-walk accessible volume method on a simple
+        geometry where we know the analytic solution: one sphere in a cube.
+        Uses estimate_accessible_volume_from_walkers and checks that the
+        estimated accessible volume is reasonably close to V_box - V_sphere.
+    args:
+        None.
+    returns:
+        dict with keys:
+            "V_box"          : box volume (Å^3)
+            "V_sphere"       : sphere volume (Å^3)
+            "V_acc_analytic" : analytic accessible volume = V_box - V_sphere (Å^3)
+            "frac_acc_rw"    : random-walk accessible fraction
+            "stderr_frac_rw" : standard error of accessible fraction
+            "V_acc_rw"       : random-walk accessible volume (Å^3)
+            "stderr_V_rw"    : standard error on volume (Å^3)
+            "rel_error"      : relative error |V_rw - V_analytic| / V_analytic
+    """
+    # Simple cube box
+    box = SimulationBox3D(
+        x=(0.0, 10.0),
+        y=(0.0, 10.0),
+        z=(0.0, 10.0),
+    )
+
+    # One sphere in the center
+    r = 3.0
+    sphere = Sphere(center=(5.0, 5.0, 5.0), radius=r)
+    spheres = [sphere]
+
+    # Analytic reference volumes
+    V_box = box.volume()
+    V_sphere = sphere.volume()
+    V_acc_analytic = V_box - V_sphere
+
+    # Random-walk estimate of accessible volume
+    rng = np.random.default_rng(123)
+    frac_acc_rw, stderr_frac_rw, V_acc_rw, stderr_V_rw = (
+        estimate_accessible_volume_random_walk(
+            box=box,
+            spheres=spheres,
+            num_walkers=500,
+            num_steps=5000,
+            step_sigma=0.5,
+            n_grid=32,
+            rng=rng,
+        )
+    )
+
+    # Relative error vs analytic solution
+    rel_error = abs(V_acc_rw - V_acc_analytic) / V_acc_analytic
+
+    # Print a short summary
+    print(f"Known volume test: cube 10×10×10 Å with one sphere (r=3 Å) in center")
+    print(f"Box volume         = {V_box:.3f} Å³")
+    print(f"Sphere volume      = {V_sphere:.3f} Å³")
+    print(f"Analytic V_access  = {V_acc_analytic:.3f} Å³\n")
+
+    print(f"RW accessible frac ≈ {frac_acc_rw:.4f} ± {2*stderr_frac_rw:.4f} (≈95% CI)")
+    print(f"RW accessible vol  ≈ {V_acc_rw:.2f} ± {2*stderr_V_rw:.2f} Å³")
+    print(f"Relative error     = {rel_error:.3%}")
+
+    # Loose assertion: should be in the right ballpark
+    assert rel_error < 0.3, (
+        "Random-walk accessible volume is too far from analytic value in toy test."
+    )
+    print("Toy test passed ✅ (RW estimate consistent with analytic geometry)")
+
+    return {
+        "V_box": V_box,
+        "V_sphere": V_sphere,
+        "V_acc_analytic": V_acc_analytic,
+        "frac_acc_rw": frac_acc_rw,
+        "stderr_frac_rw": stderr_frac_rw,
+        "V_acc_rw": V_acc_rw,
+        "stderr_V_rw": stderr_V_rw,
+        "rel_error": rel_error,
+    }
